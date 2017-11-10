@@ -2,7 +2,7 @@ The hugetlb analyze based on kernel 4.1.21
 
 ===================================================================================================
 The hugetlb key structure:
-
+```c 
 
 super_block
 {
@@ -42,7 +42,7 @@ super_block
 ...
 }
 	
-
+```
 
 ===================================================================================================
 Hugetlb allocate memory via do_page_fault() function, it is why called hugetlb as a patch of MM.
