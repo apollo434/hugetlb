@@ -46,7 +46,7 @@ super_block
 
 ===================================================================================================
 Hugetlb allocate memory via do_page_fault() function, it is why called hugetlb as a patch of MM.
-
+```c
 COW:
 
 do_page_fault		      ----|
@@ -105,8 +105,9 @@ nr_free                    0      1      2      3      4      5      6      7   
                        <---------------------------------------------------------------------------->
 left                      1476  1253   842    590    663    827    557    361    265     3     487
 
-
+```
 ===================================================================================================
+```c
 1.Hugetlb has no read/write operation, all of the action via MMAP completed.
 2.MMAP does not allocate physical page, only set the offset in VMA.
 
@@ -123,7 +124,7 @@ const struct file_operations hugetlbfs_file_operations = {
 hugetlbfs_file_mmap
   hugetlb_reserve_pages
    
-
+```
 ===================================================================================================
 Hugetlb Init:
 
