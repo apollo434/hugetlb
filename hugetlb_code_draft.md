@@ -128,8 +128,24 @@ hugetlbfs_file_mmap
 ===================================================================================================
 Hugetlb Init:
 
+```c
+Huge page allocation:
+ 
+hugetlb_init
+ hugetlb_init_hstates
+  hugetlb_hstate_alloc_pages
+   alloc_fresh_huge_page
+    alloc_fresh_huge_page_node
+     alloc_pages_exact_node
+      __alloc_pages
+       __alloc_pages_nodemask ====> allocate the huge page
+    prep_new_huge_page
+     put_page ===============> put the huge page into hugepage_freelists[]
 
 
+Huge FS Init:
+
+```
 
 
 
