@@ -1,8 +1,8 @@
-The hugetlb analyze based on kernel 4.1.21 
+The hugetlb analyze based on kernel 4.1.21
 
 ===================================================================================================
 The hugetlb key structure:
-```c 
+```c
 
 super_block
 {
@@ -10,10 +10,10 @@ super_block
 	void *s_fs_info  /* Filesystem private info */
 		|
 		|
-		 \___ >>> hugetlbfs_sb_info 
+		 \___ >>> hugetlbfs_sb_info
 		     {
 		      ...
-			struct hstate *hstate /* Defines one hugetlb page size */ 
+			struct hstate *hstate /* Defines one hugetlb page size */
 			{
 				int next_nid_to_alloc;
 				int next_nid_to_free;
@@ -41,7 +41,7 @@ super_block
 		     }
 ...
 }
-	
+
 ```
 
 ===================================================================================================
@@ -65,7 +65,7 @@ do_page_fault		      ----|
 		  get_page_from_freelist /* goes through the zonelist trying to allocate a page */
 		  __alloc_pages_slowpath /* No enough page in zonelist, try to allocate page from being preactive releasing some space */
 
-===================================================================================================
+
 Buddy system.
 
 Main structure.
@@ -74,7 +74,7 @@ Main structure.
 struct zone {
 ...
   /* free areas of different sizes */
-  struct free_area free_area[MAX_ORDER]; 
+  struct free_area free_area[MAX_ORDER];
 ...
 }
 
@@ -90,16 +90,20 @@ The organization of "ZONE" in memory:
 |____0____|           free_list  ---------> free_list
 |____1____|          _______________       _______________
 |____2____| <=====> |_1_|_2_|_3_|_4_|<===>|_1_|_2_|_3_|_4_|   (1,2....nr_free)
-    . . ^^                                 ^^ 
+    . . ^^                                 ^^
     . . ||=================================||             
     . .
 |MAX_ORDER|
 
+```
+![Alt text](/overview.jpeg)
 
-wrsadmin@pek-cdong-u145:~$ cat /proc/buddyinfo 
-Node 0, zone      DMA      1      1      0      0      2      1      1      0     1      1      3 
-Node 0, zone    DMA32   1476   1253    842    590    663    827    557    361   265      3    487 
-Node 0, zone   Normal   6323   4159   2998   2031   2181   3306   2247   1442  1047     11   1720 
+```c
+
+wrsadmin@pek-cdong-u145:~$ cat /proc/buddyinfo
+Node 0, zone      DMA      1      1      0      0      2      1      1      0     1      1      3
+Node 0, zone    DMA32   1476   1253    842    590    663    827    557    361   265      3    487
+Node 0, zone   Normal   6323   4159   2998   2031   2181   3306   2247   1442  1047     11   1720
 
 nr_free                    0      1      2      3      4      5      6      7     8      9     10
                        <---------------------------------------------------------------------------->
@@ -123,14 +127,14 @@ const struct file_operations hugetlbfs_file_operations = {
 
 hugetlbfs_file_mmap
   hugetlb_reserve_pages
-   
+
 ```
 ===================================================================================================
 Hugetlb Init:
 
 ```c
 Huge page allocation:
- 
+
 hugetlb_init
  hugetlb_init_hstates
   hugetlb_hstate_alloc_pages
@@ -146,20 +150,3 @@ hugetlb_init
 Huge FS Init:
 
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
