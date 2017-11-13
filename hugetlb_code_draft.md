@@ -65,8 +65,11 @@ do_page_fault		      ----|
 		  get_page_from_freelist /* goes through the zonelist trying to allocate a page */
 			 buffered_rmqueue /* allocate from buddy system */
 		  __alloc_pages_slowpath /* No enough page in zonelist, try to allocate page from being preactive releasing some space */
+```
+buffered_rmqueue code flow:
+![Alt text](/buffered_rmqueue.png)
 
-
+```c
 Buddy system.
 
 Main structure.
