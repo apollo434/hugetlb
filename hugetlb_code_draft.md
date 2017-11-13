@@ -1,6 +1,6 @@
 The hugetlb analyze based on kernel 4.1.21
 
-===================================================================================================
+==========================================================================
 The hugetlb key structure:
 ```c
 
@@ -44,7 +44,7 @@ super_block
 
 ```
 
-===================================================================================================
+==========================================================================
 Hugetlb allocate memory via do_page_fault() function, it is why called hugetlb as a patch of MM.
 ```c
 COW:
@@ -68,6 +68,34 @@ do_page_fault		      ----|
 ```
 buffered_rmqueue code flow:
 ![Alt text](/buffered_rmqueue.png)
+
+```c
+buffered_rmqueue()
+{
+	...
+	if (likely(order == 0))
+	{
+		...
+		/* Obtain a specified number of elements from the buddy allocator */
+		pcp->count += rmqueue_bulk()
+		...
+		/* Attempt to get the one page from per-CPU cache for enhancement */
+		if (cold)
+			page = list_entry(list->prev, struct page, lru);
+		else
+			page = list_entry(list->next, struct page, lru);
+		}
+		else
+		{
+			...
+			/* Do the hard work of removing an element from the buddy allocator */
+			page = __rmqueue(zone, order, migratetype);
+			...
+		}
+		...
+}
+
+```
 
 ```c
 Buddy system.
@@ -224,7 +252,7 @@ nr_free                    0      1      2      3      4      5      6      7   
 left                      1476  1253   842    590    663    827    557    361    265     3     487
 
 ```
-===================================================================================================
+==========================================================================
 ```c
 1.Hugetlb has no read/write operation, all of the action via MMAP completed.
 2.MMAP does not allocate physical page, only set the offset in VMA.
@@ -243,7 +271,7 @@ hugetlbfs_file_mmap
   hugetlb_reserve_pages
 
 ```
-===================================================================================================
+==========================================================================
 Hugetlb Init:
 
 ```c
