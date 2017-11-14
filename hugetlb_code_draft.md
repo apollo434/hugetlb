@@ -150,20 +150,25 @@ struct free_area {
 The organization of "ZONE" in memory:
  _________
 |____0____|           free_list  ---------> free_list
-|____1____|          _______________       _______________
-|____2____| <=====> |_1_|_2_|_3_|_4_|<===>|_1_|_2_|_3_|_4_|   (1,2....nr_free)
+|____1____|          ______1_________       _______2________  ... nr_free
+|____2____| <=====> |_1_|_2_|_3_|_4_|<===>|_1_|_2_|_3_|_4_|  ...
     . . ^^                                 ^^
     . . ||=================================||             
     . .
 |MAX_ORDER|
 ```
+The relationship between buddy system and pages.                              
+The First page organized by free_area->list_head, because the pages are  consecutive
+![Alt text](/buddy_page)
+
+The memory point and zonelist
+![Alt text](/backlist)
 ***
 __alloc_pages_nodemask() can be divided into two parts:
 1. Fast path
 2. Slow path
 
-Fast path: Go through the Water Mark search the suitable zone in zonelist.
-
+Fast path: Go through the Water Mark search the suitable zone in zonelist.    
 Slow path: Do two things.
 					 1. Swap the inactive pages into swap areas.
 					 2. Kill the thread which keep more memory.
@@ -312,15 +317,27 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
         /* Find a page of the appropriate size in the preferred list */
         for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+                /* Get the free_area */
                 area = &(zone->free_area[current_order]);
+
+                /* judge whether it is empty */
                 if (list_empty(&area->free_list[migratetype]))
                         continue;
 
+                /* Get the page from the area->free_list */
                 page = list_entry(area->free_list[migratetype].next,
                                                         struct page, lru);
+
+                /* Delte the page from the area->free_list */
                 list_del(&page->lru);
+
+                /* Set the PG_buddy bit Flag, this page will be not in the buddy system. then set page->private = 0 */
                 rmv_page_order(page);
+
+                /* Decrease the total number of the nr_free in this order area[oder]->free_list */
                 area->nr_free--;
+
+                /* If the pages is bigger than requirement, it means we need to allocate the memory from the high order areas, so, at this point, we need to split it as smaller block based on buddy system mechanism */
                 expand(zone, page, order, current_order, area, migratetype);
                 set_freepage_migratetype(page, migratetype);
                 return page;
@@ -331,7 +348,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 ```
 ***
-If __rmqueue_smallest() can't find suitable pages, then call __rmqueue_fallbak() to try to search other list.
+If __rmqueue_smallest() can't find suitable pages, then call __rmqueue_fallbak() to try to search other
 ***
 ```c
 /* Remove an element from the buddy allocator from the fallback list */
