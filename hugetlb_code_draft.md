@@ -258,16 +258,139 @@ EXPORT_SYMBOL(__alloc_pages_nodemask);
 
 ![Alt text](/overview.jpeg)
 
+```c
+/*              
+ * Do the hard work of removing an element from the buddy allocator.
+ * Call me with the zone->lock already held.
+ */
+static struct page *__rmqueue(struct zone *zone, unsigned int order,
+                                                int migratetype)
+{
+        struct page *page;
+
+retry_reserve:
+        page = __rmqueue_smallest(zone, order, migratetype);
+
+        if (unlikely(!page) && migratetype != MIGRATE_RESERVE) {
+                if (migratetype == MIGRATE_MOVABLE)
+                        page = __rmqueue_cma_fallback(zone, order);
+
+                if (!page)
+                        page = __rmqueue_fallback(zone, order, migratetype);
+
+                /*
+                 * Use MIGRATE_RESERVE rather than fail an allocation. goto
+                 * is used because __rmqueue_smallest is an inline function
+                 * and we want just one call site
+                 */
+                if (!page) {
+                        migratetype = MIGRATE_RESERVE;
+                        goto retry_reserve;
+                }
+        }
+
+        trace_mm_page_alloc_zone_locked(page, order, migratetype);
+        return page;
+}
+```
 ***
-
-Compound page: Only First page named Head, all of the others named Tail
-
+__rmqueue_smallest() scan all of the zone list, until fine the suitable continue pages
 ***
-
-![Alt text](/compound_page.png)
 
 ```c
+/*
+ * Go through the free lists for the given migratetype and remove
+ * the smallest available page from the freelists
+ */
+static inline
+struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+                                                int migratetype)
+{               
+        unsigned int current_order;
+        struct free_area *area;
+        struct page *page;
 
+        /* Find a page of the appropriate size in the preferred list */
+        for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+                area = &(zone->free_area[current_order]);
+                if (list_empty(&area->free_list[migratetype]))
+                        continue;
+
+                page = list_entry(area->free_list[migratetype].next,
+                                                        struct page, lru);
+                list_del(&page->lru);
+                rmv_page_order(page);
+                area->nr_free--;
+                expand(zone, page, order, current_order, area, migratetype);
+                set_freepage_migratetype(page, migratetype);
+                return page;
+        }
+
+        return NULL;
+}
+
+```
+***
+If __rmqueue_smallest() can't find suitable pages, then call __rmqueue_fallbak() to try to search other list.
+***
+```c
+/* Remove an element from the buddy allocator from the fallback list */
+static inline struct page *
+__rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
+{                                               
+        struct free_area *area;
+        unsigned int current_order;
+        struct page *page;
+        int fallback_mt;
+        bool can_steal;
+
+        /* Find the largest possible block of pages in the other list */
+        for (current_order = MAX_ORDER-1;
+                                current_order >= order && current_order <= MAX_ORDER-1;
+                                --current_order) {
+                area = &(zone->free_area[current_order]);
+                fallback_mt = find_suitable_fallback(area, current_order,
+                                start_migratetype, false, &can_steal);
+                if (fallback_mt == -1)
+                        continue;
+
+                page = list_entry(area->free_list[fallback_mt].next,
+                                                struct page, lru);
+                if (can_steal)
+                        steal_suitable_fallback(zone, page, start_migratetype);
+
+                /* Remove the page from the freelists */
+                area->nr_free--;
+                list_del(&page->lru);
+                rmv_page_order(page);
+
+                expand(zone, page, order, current_order, area,
+                                        start_migratetype);
+                /*
+                 * The freepage_migratetype may differ from pageblock's
+                 * migratetype depending on the decisions in
+                 * try_to_steal_freepages(). This is OK as long as it
+                 * does not differ for MIGRATE_CMA pageblocks. For CMA
+                 * we need to make sure unallocated pages flushed from
+                 * pcp lists are returned to the correct freelist.
+                 */
+                set_freepage_migratetype(page, start_migratetype);
+
+                trace_mm_page_alloc_extfrag(page, order, current_order,
+                        start_migratetype, fallback_mt);
+
+                return page;
+        }
+
+        return NULL;
+}
+
+```
+
+```
+
+
+```c
 wrsadmin@pek-cdong-u145:~$ cat /proc/buddyinfo
 Node 0, zone      DMA      1      1      0      0      2      1      1      0     1      1      3
 Node 0, zone    DMA32   1476   1253    842    590    663    827    557    361   265      3    487
@@ -316,5 +439,30 @@ hugetlb_init
 
 
 Huge FS Init:
+
+```
+=========================================================================
+Put the Huge Page into hugepage_freelists[]
+***
+
+Compound page: Only First page named Head, all of the others named Tail
+
+PG_compound is the Flag for Compound page.
+
+***
+
+![Alt text](/compound_page.png)
+
+
+```c
+void put_page(struct page *page)
+{
+        if (unlikely(PageCompound(page)))
+                put_compound_page(page);
+        else if (put_page_testzero(page))
+                __put_single_page(page);
+}
+
+
 
 ```
