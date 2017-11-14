@@ -69,6 +69,11 @@ do_page_fault		      ----|
 buffered_rmqueue code flow:
 ![Alt text](/buffered_rmqueue.png)
 
+***
+Why per-CPU define HOT and COLD page, it is because the different scenario.
+1. HOT Page: Used for CPU in cache.
+2. COLD Page: Used for Outside device, like DMA.
+***
 ```c
 buffered_rmqueue()
 {
@@ -109,12 +114,14 @@ typedef struct pglist_data {
         int nr_zones;
 ...
 }pg_data_t;
+```
 
-
+***
 Each Node has only two zonelist:
-1)one for all zones with memory
-2)one containing just zones from the node the zonelist belongs to.
-
+1. one for all zones with memory
+2. one just containing zones from the node the zonelist belongs to.
+***
+```c
 This zone list contains a maximum of MAXNODES*MAX_NR_ZONES zones
 (include/linux/mmzone.h)
 struct zonelist {
@@ -149,16 +156,19 @@ The organization of "ZONE" in memory:
     . . ||=================================||             
     . .
 |MAX_ORDER|
-
+```
+***
 __alloc_pages_nodemask() can be divided into two parts:
-1) Fast path
-2) Slow path
+1. Fast path
+2. Slow path
 
 Fast path: Go through the Water Mark search the suitable zone in zonelist.
-Slow path: Do two things:
+
+Slow path: Do two things.
 					 1. Swap the inactive pages into swap areas.
 					 2. Kill the thread which keep more memory.
-
+***
+```c
 /*
  * This is the 'heart' of the zoned buddy allocator.
  */
@@ -247,6 +257,14 @@ EXPORT_SYMBOL(__alloc_pages_nodemask);
 ```
 
 ![Alt text](/overview.jpeg)
+
+***
+
+Compound page: Only First page named Head, all of the others named Tail
+
+***
+
+![Alt text](/compound_page.png)
 
 ```c
 
