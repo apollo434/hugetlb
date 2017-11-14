@@ -348,6 +348,56 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 ```
 ***
+
+***
+```c
+/*              
+ * The order of subdivision here is critical for the IO subsystem.
+ * Please do not alter this order without good reasons and regression
+ * testing. Specifically, as large blocks of memory are subdivided,
+ * the order in which smaller blocks are delivered depends on the order
+ * they're subdivided in this function. This is the primary factor
+ * influencing the order in which pages are delivered to the IO
+ * subsystem according to empirical testing, and this is also justified
+ * by considering the behavior of a buddy system containing a single
+ * large block of memory acted on by a series of small allocations.
+ * This behavior is a critical factor in sglist merging's success.
+ *                                              
+ * -- nyc
+ */
+static inline void expand(struct zone *zone, struct page *page,
+        int low, int high, struct free_area *area,
+        int migratetype)
+{       
+        unsigned long size = 1 << high;
+
+        while (high > low) {
+                area--;
+                high--;
+                size >>= 1;
+                VM_BUG_ON_PAGE(bad_range(zone, &page[size]), &page[size]);
+
+                if (IS_ENABLED(CONFIG_DEBUG_PAGEALLOC) &&
+                        debug_guardpage_enabled() &&
+                        high < debug_guardpage_minorder()) {
+                        /*
+                         * Mark as guard pages (or page), that will allow to
+                         * merge back to allocator when buddy will be freed.
+                         * Corresponding page table entries will not be touched,
+                         * pages will stay not present in virtual address space
+                         */
+                        set_page_guard(zone, &page[size], high, migratetype);
+                        continue;
+                }
+                list_add(&page[size].lru, &area->free_list[migratetype]);
+                area->nr_free++;
+                set_page_order(&page[size], high);
+        }
+}
+
+```
+
+***
 If __rmqueue_smallest() can't find suitable pages, then call __rmqueue_fallbak() to try to search other
 ***
 ```c
