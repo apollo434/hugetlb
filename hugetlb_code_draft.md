@@ -150,6 +150,14 @@ The organization of "ZONE" in memory:
     . .
 |MAX_ORDER|
 
+__alloc_pages_nodemask() can be divided into two parts:
+1) Fast path
+2) Slow path
+
+Fast path: Go through the Water Mark search the suitable zone in zonelist.
+Slow path: Do two things:
+					 1. Swap the inactive pages into swap areas.
+					 2. Kill the thread which keep more memory.
 
 /*
  * This is the 'heart' of the zoned buddy allocator.
