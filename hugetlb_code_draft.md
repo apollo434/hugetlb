@@ -1,7 +1,7 @@
 The hugetlb analyze based on kernel 4.1.21
 
-==========================================================================
-The hugetlb key structure:
+
+# The hugetlb key structure:
 ```c
 
 super_block
@@ -44,7 +44,8 @@ super_block
 
 ```
 
-==========================================================================
+# Hugetlb do_page_fault
+
 Hugetlb allocate memory via do_page_fault() function, it is why called hugetlb as a patch of MM.
 ```c
 COW:
@@ -665,60 +666,7 @@ __rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
 
 ```
 
-```
-
-
-```c
-wrsadmin@pek-cdong-u145:~$ cat /proc/buddyinfo
-Node 0, zone      DMA      1      1      0      0      2      1      1      0     1      1      3
-Node 0, zone    DMA32   1476   1253    842    590    663    827    557    361   265      3    487
-Node 0, zone   Normal   6323   4159   2998   2031   2181   3306   2247   1442  1047     11   1720
-
-nr_free                    0      1      2      3      4      5      6      7     8      9     10
-                       <---------------------------------------------------------------------------->
-left                      1476  1253   842    590    663    827    557    361    265     3     487
-
-```
-==========================================================================
-```c
-1.Hugetlb has no read/write operation, all of the action via MMAP completed.
-2.MMAP does not allocate physical page, only set the offset in VMA.
-
-MMAP:
-
-const struct file_operations hugetlbfs_file_operations = {
-        .read_iter              = hugetlbfs_read_iter,
-        .mmap                   = hugetlbfs_file_mmap,
-        .fsync                  = noop_fsync,
-        .get_unmapped_area      = hugetlb_get_unmapped_area,
-        .llseek         = default_llseek,
-};
-
-hugetlbfs_file_mmap
-  hugetlb_reserve_pages
-
-```
-==========================================================================  Hugetlb Init:
-
-```c
-Huge page allocation:
-
-hugetlb_init
- hugetlb_init_hstates
-  hugetlb_hstate_alloc_pages
-   alloc_fresh_huge_page
-    alloc_fresh_huge_page_node
-     alloc_pages_exact_node
-      __alloc_pages
-       __alloc_pages_nodemask ====> allocate the huge page
-    prep_new_huge_page
-     put_page ===============> put the huge page into hugepage_freelists[]
-
-
-Huge FS Init:
-
-```
-========================================================================= Put the Huge Page into hugepage_freelists[]
+Put the Huge Page into hugepage_freelists[]
 ***
 
 Compound page: Only First page named Head, all of the others named Tail
@@ -740,5 +688,61 @@ void put_page(struct page *page)
 }
 
 
+
+```
+
+
+
+```c
+wrsadmin@pek-cdong-u145:~$ cat /proc/buddyinfo
+Node 0, zone      DMA      1      1      0      0      2      1      1      0     1      1      3
+Node 0, zone    DMA32   1476   1253    842    590    663    827    557    361   265      3    487
+Node 0, zone   Normal   6323   4159   2998   2031   2181   3306   2247   1442  1047     11   1720
+
+nr_free                    0      1      2      3      4      5      6      7     8      9     10
+                       <---------------------------------------------------------------------------->
+left                      1476  1253   842    590    663    827    557    361    265     3     487
+
+```
+
+## Hugetlb MMap
+
+```c
+1.Hugetlb has no read/write operation, all of the action via MMAP completed.
+2.MMAP does not allocate physical page, only set the offset in VMA.
+
+MMAP:
+
+const struct file_operations hugetlbfs_file_operations = {
+        .read_iter              = hugetlbfs_read_iter,
+        .mmap                   = hugetlbfs_file_mmap,
+        .fsync                  = noop_fsync,
+        .get_unmapped_area      = hugetlb_get_unmapped_area,
+        .llseek         = default_llseek,
+};
+
+hugetlbfs_file_mmap
+  hugetlb_reserve_pages
+
+```
+
+## Hugetlb Init
+
+```c
+Huge page allocation:
+
+hugetlb_init
+ hugetlb_init_hstates
+  hugetlb_hstate_alloc_pages
+   alloc_fresh_huge_page
+    alloc_fresh_huge_page_node
+     alloc_pages_exact_node
+      __alloc_pages
+       __alloc_pages_nodemask ====> allocate the huge page
+    prep_new_huge_page
+     put_page ===============> put the huge page into hugepage_freelists[]
+
+
+Huge FS Init:
 
 ```
