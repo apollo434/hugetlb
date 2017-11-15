@@ -76,7 +76,35 @@ enum {
 };
 
 ```
+***
+This is the fallback of free_list[MIGRATE_TYPES], when free_list[xxx] are not enough, then gather the momery from the fallback[][]
+***
+```c
+/*
+ * This array describes the order lists are fallen back to when
+ * the free lists for the desirable migrate type are depleted
+ */
+static int fallbacks[MIGRATE_TYPES][4] = {
+        [MIGRATE_UNMOVABLE]   = { MIGRATE_RECLAIMABLE, MIGRATE_MOVABLE,     MIGRATE_RESERVE },
+        [MIGRATE_RECLAIMABLE] = { MIGRATE_UNMOVABLE,   MIGRATE_MOVABLE,     MIGRATE_RESERVE },
+        [MIGRATE_MOVABLE]     = { MIGRATE_RECLAIMABLE, MIGRATE_UNMOVABLE,   MIGRATE_RESERVE },
+#ifdef CONFIG_CMA
+        [MIGRATE_CMA]         = { MIGRATE_RESERVE }, /* Never used */
+#endif
+        [MIGRATE_RESERVE]     = { MIGRATE_RESERVE }, /* Never used */
+#ifdef CONFIG_MEMORY_ISOLATION
+        [MIGRATE_ISOLATE]     = { MIGRATE_RESERVE }, /* Never used */
+#endif
+};
 
+/* If huge pages are not used, group by MAX_ORDER_NR_PAGES */
+#define pageblock_order         (MAX_ORDER-1)
+
+#endif /* CONFIG_HUGETLB_PAGE */
+
+#define pageblock_nr_pages      (1UL << pageblock_order)
+
+```
 # Hugetlb do_page_fault
 
 Hugetlb allocate memory via do_page_fault() function, it is why called hugetlb as a patch of MM.
