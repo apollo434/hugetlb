@@ -69,39 +69,6 @@ do_page_fault		      ----|
 buffered_rmqueue code flow:
 ![Alt text](/buffered_rmqueue.png)
 
-***
-Why per-CPU define HOT and COLD page, it is because the different scenario.
-1. HOT Page: Used for CPU in cache.
-2. COLD Page: Used for Outside device, like DMA.
-***
-```c
-buffered_rmqueue()
-{
-	...
-	if (likely(order == 0))
-	{
-		...
-		/* Obtain a specified number of elements from the buddy allocator */
-		pcp->count += rmqueue_bulk()
-		...
-		/* Attempt to get the one page from per-CPU cache for enhancement */
-		if (cold)
-			page = list_entry(list->prev, struct page, lru);
-		else
-			page = list_entry(list->next, struct page, lru);
-		}
-		else
-		{
-			...
-			/* Do the hard work of removing an element from the buddy allocator */
-			page = __rmqueue(zone, order, migratetype);
-			...
-		}
-		...
-}
-
-```
-
 ```c
 Buddy system.
 
@@ -172,6 +139,9 @@ Fast path: Go through the Water Mark search the suitable zone in zonelist.
 Slow path: Do two things.
 					 1. Swap the inactive pages into swap areas.
 					 2. Kill the thread which keep more memory.
+
+**NOTE**: Regarding the "migratetype" in free_list, in my opinion, all of the free_list[] pointed every different size memory block start address of page, so, "migratetype" means whether this memory block can be migrated or not.
+
 ***
 ```c
 /*
@@ -263,6 +233,235 @@ EXPORT_SYMBOL(__alloc_pages_nodemask);
 
 ![Alt text](/overview.jpeg)
 
+***
+This is the Fast path for allocating Pages
+***
+
+```c
+/*
+ * get_page_from_freelist goes through the zonelist trying to allocate
+ * a page.
+ */
+static struct page *
+get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+                                                const struct alloc_context *ac)
+{
+        struct zonelist *zonelist = ac->zonelist;
+        struct zoneref *z;
+        struct page *page = NULL;
+        struct zone *zone;
+        nodemask_t *allowednodes = NULL;/* zonelist_cache approximation */
+        int zlc_active = 0;             /* set if using zonelist_cache */
+        int did_zlc_setup = 0;          /* just call zlc_setup() one time */
+        bool consider_zone_dirty = (alloc_flags & ALLOC_WMARK_LOW) &&
+                                (gfp_mask & __GFP_WRITE);
+        int nr_fair_skipped = 0;
+        bool zonelist_rescan;
+
+zonelist_scan:
+        zonelist_rescan = false;
+
+        /*
+         * Scan zonelist, looking for a zone with enough free.
+         * See also __cpuset_node_allowed() comment in kernel/cpuset.c.
+         */
+        for_each_zone_zonelist_nodemask(zone, z, zonelist, ac->high_zoneidx,
+                                                                ac->nodemask) {
+                unsigned long mark;
+
+                if (IS_ENABLED(CONFIG_NUMA) && zlc_active &&
+                        !zlc_zone_worth_trying(zonelist, z, allowednodes))
+                                continue;
+                if (cpusets_enabled() &&
+                        (alloc_flags & ALLOC_CPUSET) &&
+                        !cpuset_zone_allowed(zone, gfp_mask))
+                                continue;
+                /*
+                 * Distribute pages in proportion to the individual
+                 * zone size to ensure fair page aging.  The zone a
+                 * page was allocated in should have no effect on the
+                 * time the page has in memory before being reclaimed.
+                 */
+                if (alloc_flags & ALLOC_FAIR) {
+                        if (!zone_local(ac->preferred_zone, zone))
+                                break;
+                        if (test_bit(ZONE_FAIR_DEPLETED, &zone->flags)) {
+                                nr_fair_skipped++;
+                                continue;
+                        }
+                }
+                /*
+                 * When allocating a page cache page for writing, we
+                 * want to get it from a zone that is within its dirty
+                 * limit, such that no single zone holds more than its
+                 * proportional share of globally allowed dirty pages.
+                 * The dirty limits take into account the zone's
+                 * lowmem reserves and high watermark so that kswapd
+                 * should be able to balance it without having to
+                 * write pages from its LRU list.
+                 *
+                 * This may look like it could increase pressure on
+                 * lower zones by failing allocations in higher zones
+                 * before they are full.  But the pages that do spill
+                 * over are limited as the lower zones are protected
+                 * by this very same mechanism.  It should not become
+                 * a practical burden to them.
+                 *
+                 * XXX: For now, allow allocations to potentially
+                 * exceed the per-zone dirty limit in the slowpath
+                 * (ALLOC_WMARK_LOW unset) before going into reclaim,
+                 * which is important when on a NUMA setup the allowed
+                 * zones are together not big enough to reach the
+                 * global limit.  The proper fix for these situations
+                 * will require awareness of zones in the
+                 * dirty-throttling and the flusher threads.
+                 */
+                if (consider_zone_dirty && !zone_dirty_ok(zone))
+                        continue;
+
+                mark = zone->watermark[alloc_flags & ALLOC_WMARK_MASK];
+                if (!zone_watermark_ok(zone, order, mark,
+                                       ac->classzone_idx, alloc_flags)) {
+                        int ret;
+
+                        /* Checked here to keep the fast path fast */
+                        BUILD_BUG_ON(ALLOC_NO_WATERMARKS < NR_WMARK);
+                        if (alloc_flags & ALLOC_NO_WATERMARKS)
+                                goto try_this_zone;
+
+                        if (IS_ENABLED(CONFIG_NUMA) &&
+                                        !did_zlc_setup && nr_online_nodes > 1) {
+                                /*
+                                 * we do zlc_setup if there are multiple nodes
+                                 * and before considering the first zone allowed
+                                 * by the cpuset.
+                                 */
+                                allowednodes = zlc_setup(zonelist, alloc_flags);
+                                zlc_active = 1;
+                                did_zlc_setup = 1;
+                        }
+
+                        if (zone_reclaim_mode == 0 ||
+                            !zone_allows_reclaim(ac->preferred_zone, zone))
+                                goto this_zone_full;
+
+                        /*
+                         * As we may have just activated ZLC, check if the first
+                         * eligible zone has failed zone_reclaim recently.
+                         */
+                        if (IS_ENABLED(CONFIG_NUMA) && zlc_active &&
+                                !zlc_zone_worth_trying(zonelist, z, allowednodes))
+                                continue;
+
+                        ret = zone_reclaim(zone, gfp_mask, order);
+                        switch (ret) {
+                        case ZONE_RECLAIM_NOSCAN:
+                                /* did not scan */
+                                continue;
+                        case ZONE_RECLAIM_FULL:
+                                /* scanned but unreclaimable */
+                                continue;
+                        default:
+                                /* did we reclaim enough */
+                                if (zone_watermark_ok(zone, order, mark,
+                                                ac->classzone_idx, alloc_flags))
+                                        goto try_this_zone;
+
+                                /*
+                                 * Failed to reclaim enough to meet watermark.
+                                 * Only mark the zone full if checking the min
+                                 * watermark or if we failed to reclaim just
+                                 * 1<<order pages or else the page allocator
+                                 * fastpath will prematurely mark zones full
+                                 * when the watermark is between the low and
+                                 * min watermarks.
+                                 */
+                                if (((alloc_flags & ALLOC_WMARK_MASK) == ALLOC_WMARK_MIN) ||
+                                    ret == ZONE_RECLAIM_SOME)
+                                        goto this_zone_full;
+
+                                continue;
+                        }
+                }
+
+try_this_zone:
+                page = buffered_rmqueue(ac->preferred_zone, zone, order,
+                                                gfp_mask, ac->migratetype);
+                if (page) {
+                        if (prep_new_page(page, order, gfp_mask, alloc_flags))
+                                goto try_this_zone;
+                        return page;
+                }
+this_zone_full:
+                if (IS_ENABLED(CONFIG_NUMA) && zlc_active)
+                        zlc_mark_zone_full(zonelist, z);
+        }
+
+        /*
+         * The first pass makes sure allocations are spread fairly within the
+         * local node.  However, the local node might have free pages left
+         * after the fairness batches are exhausted, and remote zones haven't
+         * even been considered yet.  Try once more without fairness, and
+         * include remote zones now, before entering the slowpath and waking
+         * kswapd: prefer spilling to a remote zone over swapping locally.
+         */
+        if (alloc_flags & ALLOC_FAIR) {
+                alloc_flags &= ~ALLOC_FAIR;
+                if (nr_fair_skipped) {
+                        zonelist_rescan = true;
+                        reset_alloc_batches(ac->preferred_zone);
+                }
+                if (nr_online_nodes > 1)
+                        zonelist_rescan = true;
+        }
+
+        if (unlikely(IS_ENABLED(CONFIG_NUMA) && zlc_active)) {
+                /* Disable zlc cache for second zonelist scan */
+                zlc_active = 0;
+                zonelist_rescan = true;
+        }
+
+        if (zonelist_rescan)
+                goto zonelist_scan;
+
+        return NULL;
+}
+
+```
+
+***
+Why per-CPU define HOT and COLD page, it is because the different scenario.
+1. HOT Page: Used for CPU in cache.
+2. COLD Page: Used for Outside device, like DMA.
+***
+```c
+buffered_rmqueue()
+{
+	...
+	if (likely(order == 0))
+	{
+		...
+		/* Obtain a specified number of elements from the buddy allocator */
+		pcp->count += rmqueue_bulk()
+		...
+		/* Attempt to get the one page from per-CPU cache for enhancement */
+		if (cold)
+			page = list_entry(list->prev, struct page, lru);
+		else
+			page = list_entry(list->next, struct page, lru);
+		}
+		else
+		{
+			...
+			/* Do the hard work of removing an element from the buddy allocator */
+			page = __rmqueue(zone, order, migratetype);
+			...
+		}
+		...
+}
+
+```
+
 ```c
 /*              
  * Do the hard work of removing an element from the buddy allocator.
@@ -348,7 +547,8 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 ```
 ***
-
+The steps of expand:
+![Alt text](/steps_expand.png)
 ***
 ```c
 /*              
@@ -371,6 +571,13 @@ static inline void expand(struct zone *zone, struct page *page,
 {       
         unsigned long size = 1 << high;
 
+      /*
+       * area -- : move the free_list pointer
+       * high -- : It is the order that kernel selected
+       * size >>= 1 : It means order menus 1
+       * low : It means the order wanted to allocate
+       * &page[size] : It means the start address of the low order (high --)
+       */
         while (high > low) {
                 area--;
                 high--;
@@ -389,8 +596,12 @@ static inline void expand(struct zone *zone, struct page *page,
                         set_page_guard(zone, &page[size], high, migratetype);
                         continue;
                 }
+
+                /* Put the &page[size].lru link the low order together */
                 list_add(&page[size].lru, &area->free_list[migratetype]);
                 area->nr_free++;
+
+                /* Set struct page->private and set PG_buddy bit Flag */
                 set_page_order(&page[size], high);
         }
 }
@@ -487,8 +698,7 @@ hugetlbfs_file_mmap
   hugetlb_reserve_pages
 
 ```
-==========================================================================
-Hugetlb Init:
+==========================================================================  Hugetlb Init:
 
 ```c
 Huge page allocation:
@@ -508,8 +718,7 @@ hugetlb_init
 Huge FS Init:
 
 ```
-=========================================================================
-Put the Huge Page into hugepage_freelists[]
+========================================================================= Put the Huge Page into hugepage_freelists[]
 ***
 
 Compound page: Only First page named Head, all of the others named Tail
