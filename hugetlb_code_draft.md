@@ -128,6 +128,27 @@ do_page_fault		      ----|
 			 buffered_rmqueue /* allocate from buddy system */
 		  __alloc_pages_slowpath /* No enough page in zonelist, try to allocate page from being preactive releasing some space */
 ```
+***
+elaborate the *__do_page_fault* before *handle_mm_fault*
+***
+
+Regarding requirement for do_page_fault, divede this operation into two parts:
+1. Kernel mode.
+2. User mode.
+
+There is the basic overview of it:
+![Alt text](/do_page_fault_overview.png)
+
+This is the detailed flow of *__do_page_fault* before *handle_mm_fault*
+
+The detailed steps:
+
+![Alt text](/do_page_fault_detail.png)
+
+```c
+
+```
+
 buffered_rmqueue code flow:
 ![Alt text](/buffered_rmqueue.png)
 
