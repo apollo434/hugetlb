@@ -561,7 +561,7 @@ The First page organized by free_area->list_head, because the pages are  consecu
 ![Alt text](/pic/buddy_page)
 
 The memory point and zonelist
-![Alt text](/backlist)
+![Alt text](/pic/backlist)
 ***
 __alloc_pages_nodemask() can be divided into two parts:
 1. Fast path
