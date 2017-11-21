@@ -137,20 +137,369 @@ Regarding requirement for do_page_fault, divede this operation into two parts:
 2. User mode.
 
 There is the basic overview of it:
-![Alt text](/do_page_fault_overview.png)
+![Alt text](/pic/do_page_fault_overview.png)
 
 This is the detailed flow of *__do_page_fault* before *handle_mm_fault*
 
 The detailed steps:
 
-![Alt text](/do_page_fault_detail.png)
+![Alt text](/pic/do_page_fault_detail.png)
 
 ```c
+Only analyze 32-bit situation:
+static void __kprobes __do_page_fault(struct pt_regs *regs, unsigned long write,
+        unsigned long address)
+{
+...
+/*
+ * The first of all, begin to Check Kernel space
+ *
+ */
+
+            /* If adress is during in VMALLOC_START and VMALLOC_END or
+             * If adress is during in MODULE_START and MODULE_END.
+             * Both of them all go to no_context
+             * define VMALLOC_FAULT_TARGET no_context
+             */
+            if (unlikely(address >= VMALLOC_START && address <= VMALLOC_END))
+                goto VMALLOC_FAULT_TARGET;
+#ifdef MODULE_START
+        if (unlikely(address >= MODULE_START && address < MODULE_END))
+                goto VMALLOC_FAULT_TARGET;
+#endif
+
+...
+/*
+ * Secondly, Check the user space
+ *
+ */
+        /*
+         * If we're in an interrupt or have no user
+         * context, we must not take the fault..
+         */
+        if (in_atomic() || !mm)
+                goto bad_area_nosemaphore;
+
+retry:
+        down_read(&mm->mmap_sem);
+        /* Get the vma via mm and address */
+        vma = find_vma(mm, address);
+
+        /* If vma is null, the adress is invalid, go to bad_area */
+        if (!vma)
+                goto bad_area;
+
+        /* If address >= vm_start, the address is valid, go to good_area */
+        if (vma->vm_start <= address)
+                goto good_area;
+
+        /* If vma->vm_flags == VM_GROWSDOWN, it means the adress stay in stack area, need to expand it, so go to next code for getting expand_stack */
+        if (!(vma->vm_flags & VM_GROWSDOWN))
+                goto bad_area;
+        if (expand_stack(vma, address))
+                goto bad_area;
+...
+good_area:
+
+         info.si_code = SEGV_ACCERR;
+         /* If write is valid, check vma->vm_flags == VM_WRITE? If Yes, Keep going, If No, go to bad_area */
+        if (write) {
+                if (!(vma->vm_flags & VM_WRITE))
+                        goto bad_area;
+                flags |= FAULT_FLAG_WRITE;
+        } else {
+
+                /*
+                * #define MIPS_CPU_RIXI           0x00800000ull /* CPU has TLB Read/eXec Inhibit */
+                * # define cpu_has_rixi           (cpu_data[0].options & MIPS_CPU_RIXI)
+                * It means the TLB is inhibit
+                */
+                if (cpu_has_rixi) {
+                        if (address == regs->cp0_epc && !(vma->vm_flags & VM_EXEC)) {
+                                goto bad_area;
+                        }
+
+                        /* If read is valid, check vma->flags == VM_READ? If Yes, keep going, If No, go to bad_area */
+                        if (!(vma->vm_flags & VM_READ)) {
+                                goto bad_area;
+                        }
+                } else {
+
+                /*
+                 * TLB is not inhibit, no pages for read, so, one of the  VM_READ, VM_WRITE or VM_EXEC need to be set, otherwise, go to bad_area.
+                 *
+                 *
+                */
+                        if (!(vma->vm_flags & (VM_READ | VM_WRITE | VM_EXEC)))
+                                goto bad_area;
+                }
+        }
+
+        /*
+         * If for any reason at all we couldn't handle the fault,
+         * make sure we exit gracefully rather than endlessly redo
+         * the fault.
+         */
+        fault = handle_mm_fault(mm, vma, address, flags);
+...
+bad_area:
+        up_read(&mm->mmap_sem);
+
+bad_area_nosemaphore:
+        /* User mode accesses just cause a SIGSEGV */
+        if (user_mode(regs)) {
+...
+                force_sig_info(SIGSEGV, &info, tsk);
+                return;
+        }
+
+no_context:
+        /* Are we prepared to handle this kernel fault?  */
+        if (fixup_exception(regs)) {
+                current->thread.cp0_baduaddr = address;
+                return;
+        }
+
+        /*
+         * Oops. The kernel tried to access some bad page. We'll have to
+         * terminate things with extreme prejudice.
+         */
+        bust_spinlocks(1);
+
+        printk(KERN_ALERT "CPU %d Unable to handle kernel paging request at "
+               "virtual address %0*lx, epc == %0*lx, ra == %0*lx\n",
+               raw_smp_processor_id(), field, address, field, regs->cp0_epc,
+               field,  regs->regs[31]);
+        die("Oops", regs);
+
+out_of_memory:
+        /*
+         * We ran out of memory, call the OOM killer, and return the userspace
+         * (which will retry the fault, or kill us if we got oom-killed).
+         */
+        up_read(&mm->mmap_sem);
+        if (!user_mode(regs))
+                goto no_context;
+        pagefault_out_of_memory();
+        return;
+
+do_sigbus:
+        up_read(&mm->mmap_sem);
+
+        /* Kernel mode? Handle exceptions or die */
+        if (!user_mode(regs))
+                goto no_context;
+        else
+        /*
+         * Send a sigbus, regardless of whether we were in kernel
+         * or user mode.
+         */
+...
+        force_sig_info(SIGBUS, &info, tsk);
+
+        return;
+...
+}
+```
+***
+handle_mm_fault
+	__handle_mm_fault
+
+**NOTE:** The main function of it is that create the "pud" via "pgd", and create "pmd" via "pud", during these operations, deal with the huge tlb via hugetlb_fault(); later, call handle_pte_fault to tackle with "pte"
+
+***
+```c
+/*
+ * By the time we get here, we already hold the mm semaphore
+ *
+ * The mmap_sem may have been released depending on flags and our
+ * return value.  See filemap_fault() and __lock_page_or_retry().
+ */
+static int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+                             unsigned long address, unsigned int flags)
+{
+        pgd_t *pgd;
+        pud_t *pud;
+        pmd_t *pmd;
+        pte_t *pte;
+
+        /* Deal with hugetlb_fault */
+        if (unlikely(is_vm_hugetlb_page(vma)))
+                return hugetlb_fault(mm, vma, address, flags);
+
+        pgd = pgd_offset(mm, address);
+        pud = pud_alloc(mm, pgd, address);
+        if (!pud)
+                return VM_FAULT_OOM;
+        pmd = pmd_alloc(mm, pud, address);
+        if (!pmd)
+                return VM_FAULT_OOM;
+        if (pmd_none(*pmd) && transparent_hugepage_enabled(vma)) {
+                int ret = VM_FAULT_FALLBACK;
+                if (!vma->vm_ops)
+                        ret = do_huge_pmd_anonymous_page(mm, vma, address,
+                                        pmd, flags);
+                if (!(ret & VM_FAULT_FALLBACK))
+                        return ret;
+        } else {
+                pmd_t orig_pmd = *pmd;
+                int ret;
+
+                barrier();
+                if (pmd_trans_huge(orig_pmd)) {
+                        unsigned int dirty = flags & FAULT_FLAG_WRITE;
+
+                        /*
+                         * If the pmd is splitting, return and retry the
+                         * the fault.  Alternative: wait until the split
+                         * is done, and goto retry.
+                         */
+                        if (pmd_trans_splitting(orig_pmd))
+                                return 0;
+
+                        if (pmd_protnone(orig_pmd))
+                                return do_huge_pmd_numa_page(mm, vma, address,
+                                                             orig_pmd, pmd);
+                        if (dirty && !pmd_write(orig_pmd)) {
+                                ret = do_huge_pmd_wp_page(mm, vma, address, pmd,
+                                                          orig_pmd);
+                                if (!(ret & VM_FAULT_FALLBACK))
+                                        return ret;
+                        } else {
+                                huge_pmd_set_accessed(mm, vma, address, pmd,
+                                                      orig_pmd, dirty);
+                                return 0;
+                        }
+                }
+        }
+
+        /*
+         * Use __pte_alloc instead of pte_alloc_map, because we can't
+         * run pte_offset_map on the pmd, if an huge pmd could
+         * materialize from under us from a different thread.
+         */
+        if (unlikely(pmd_none(*pmd)) &&
+            unlikely(__pte_alloc(mm, vma, pmd, address)))
+                return VM_FAULT_OOM;
+        /*
+         * If a huge pmd materialized under us just retry later.  Use
+         * pmd_trans_unstable() instead of pmd_trans_huge() to ensure the pmd
+         * didn't become pmd_trans_huge under us and then back to pmd_none, as
+         * a result of MADV_DONTNEED running immediately after a huge pmd fault
+         * in a different thread of this mm, in turn leading to a misleading
+         * pmd_trans_huge() retval.  All we have to ensure is that it is a
+         * regular pmd that we can walk with pte_offset_map() and we can do that
+         * through an atomic read in C, which is what pmd_trans_unstable()
+         * provides.
+         */
+        if (unlikely(pmd_trans_unstable(pmd)))
+                return 0;
+        /*
+         * A regular pmd is established and it can't morph into a huge pmd
+         * from under us anymore at this point because we hold the mmap_sem
+         * read mode and khugepaged takes it in write mode. So now it's
+         * safe to run pte_offset_map().
+         */
+        pte = pte_offset_map(pmd, address);
+
+        return handle_pte_fault(mm, vma, address, pte, pmd, flags);
+}
+
+```
+***
+handle_mm_fault
+	__handle_mm_fault
+		handle_pte_fault
+
+1.
+
+***
+
+![Alt text](/)
+
+```c
+/*
+ * These routines also need to handle stuff like marking pages dirty
+ * and/or accessed for architectures that don't do it in hardware (most
+ * RISC architectures).  The early dirtying is also good on the i386.
+ *
+ * There is also a hook called "update_mmu_cache()" that architectures
+ * with external mmu caches can use to update those (ie the Sparc or
+ * PowerPC hashed page tables that act as extended TLBs).
+ *
+ * We enter with non-exclusive mmap_sem (to exclude vma changes,
+ * but allow concurrent faults), and pte mapped but not yet locked.
+ * We return with pte unmapped and unlocked.
+ *
+ * The mmap_sem may have been released depending on flags and our
+ * return value.  See filemap_fault() and __lock_page_or_retry().
+ */
+static int handle_pte_fault(struct mm_struct *mm,
+                     struct vm_area_struct *vma, unsigned long address,
+                     pte_t *pte, pmd_t *pmd, unsigned int flags)
+{
+        pte_t entry;
+        spinlock_t *ptl;
+
+        /*
+         * some architectures can have larger ptes than wordsize,
+         * e.g.ppc44x-defconfig has CONFIG_PTE_64BIT=y and CONFIG_32BIT=y,
+
+         * so READ_ONCE or ACCESS_ONCE cannot guarantee atomic accesses.
+         * The code below just needs a consistent view for the ifs and
+         * we later double check anyway with the ptl lock held. So here
+         * a barrier will do.
+         */
+        entry = *pte;
+        barrier();
+        if (!pte_present(entry)) {
+                if (pte_none(entry)) {
+                        if (vma->vm_ops)
+                                return do_fault(mm, vma, address, pte, pmd,
+                                                flags, entry);
+
+                        return do_anonymous_page(mm, vma, address, pte, pmd,
+                                        flags);
+                }
+                return do_swap_page(mm, vma, address,
+                                        pte, pmd, flags, entry);
+        }
+
+        if (pte_protnone(entry))
+                return do_numa_page(mm, vma, address, entry, pte, pmd);
+
+        ptl = pte_lockptr(mm, pmd);
+        spin_lock(ptl);
+        if (unlikely(!pte_same(*pte, entry)))
+                goto unlock;
+        if (flags & FAULT_FLAG_WRITE) {
+                if (!pte_write(entry))
+                        return do_wp_page(mm, vma, address,
+                                        pte, pmd, ptl, entry);
+                entry = pte_mkdirty(entry);
+        }
+        entry = pte_mkyoung(entry);
+        if (ptep_set_access_flags(vma, address, pte, entry, flags & FAULT_FLAG_WRITE)) {
+                update_mmu_cache(vma, address, pte);
+        } else {
+                /*
+                 * This is needed only for protection faults but the arch code
+                 * is not yet telling us if this is a protection fault or not.
+                 * This still avoids useless tlb flushes for .text page faults
+                 * with threads.
+                 */
+                if (flags & FAULT_FLAG_WRITE)
+                        flush_tlb_fix_spurious_fault(vma, address);
+        }
+unlock:
+        pte_unmap_unlock(pte, ptl);
+        return 0;
+}
 
 ```
 
 buffered_rmqueue code flow:
-![Alt text](/buffered_rmqueue.png)
+![Alt text](/pic/buffered_rmqueue.png)
 
 ```c
 Buddy system.
@@ -209,7 +558,7 @@ The organization of "ZONE" in memory:
 ```
 The relationship between buddy system and pages.                              
 The First page organized by free_area->list_head, because the pages are  consecutive
-![Alt text](/buddy_page)
+![Alt text](/pic/buddy_page)
 
 The memory point and zonelist
 ![Alt text](/backlist)
@@ -223,7 +572,7 @@ Slow path: Do two things.
 					 1. Swap the inactive pages into swap areas.
 					 2. Kill the thread which keep more memory.
 
-**NOTE**: Regarding the "migratetype" in free_list, in my opinion, all of the free_list[] pointed every different size memory block start address of page, so, "migratetype" means whether this memory block can be migrated or not.
+**NOTE:** Regarding the "migratetype" in free_list, in my opinion, all of the free_list[] pointed every different size memory block start address of page, so, "migratetype" means whether this memory block can be migrated or not.
 
 ***
 ```c
@@ -314,7 +663,7 @@ EXPORT_SYMBOL(__alloc_pages_nodemask);
 
 ```
 
-![Alt text](/overview.jpeg)
+![Alt text](/pic/overview.jpeg)
 
 ***
 This is the Fast path for allocating Pages
@@ -631,7 +980,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 ```
 ***
 The steps of expand:
-![Alt text](/steps_expand.png)
+![Alt text](/pic/steps_expand.png)
 ***
 ```c
 /*              
@@ -757,7 +1106,7 @@ PG_compound is the Flag for Compound page.
 
 ***
 
-![Alt text](/compound_page.png)
+![Alt text](/pic/compound_page.png)
 
 
 ```c
